@@ -1,0 +1,735 @@
+---
+title: "Análisis de datos Ómnicos (M0 - 157) - PEC 1"
+subtitle: "MYC Transactome Mapped by global Array-based Nuclear Run - on (ANRO - Affymetrix)"
+author: "Esther Martí"
+date: "8/4/2020"
+linkcolor: blue
+urlcolor: blue
+output: 
+  pdf_document:
+    toc: yes
+    latex_engine: pdflatex
+    number_sections: yes
+bibliography: references.bib
+link-citations: yes
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r Impresion, echo=FALSE}
+if(!(require(printr))) {
+  install.packages(
+    'printr',
+    type = 'source',
+    repos = c('http://yihui.name/xran', 'http://cran.rstudio.com')
+  )
+}
+```
+
+# Antes de empezar.
+
+Antes de empezar a trabajar se tienen que instalar los siguientes paquetes.
+
+Primero instalamos el paquete basico bioconductor.
+
+```{r installBioC, message=FALSE, warning=FALSE, eval=FALSE}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install()
+```
+
+y seguidamente todos los paquetes que vamos a necesitar
+
+```{r installPackages, message=FALSE, warning=FALSE, eval=FALSE}
+install.packages("knitcitations")
+install.packages("knitr")
+install.packages("colorspace")
+install.packages("gplots")
+install.packages("ggplot2")
+install.packages("ggrepel")
+install.packages("htmlTable")
+install.packages("prettydoc")
+install.packages("devtools")
+install.packages("BiocManager")
+BiocManager::install("oligo")
+BiocManager::install("arrayQualityMetrics")
+BiocManager::install("pvca")
+# NOT NEEDED UNTIL ANALYSES ARE PERFORMED
+BiocManager::install("limma")
+BiocManager::install("org.Hs.eg.db")
+BiocManager::install("genefilter")
+BiocManager::install("pd.huex.1.0.st.v2")
+BiocManager::install("annotate")
+BiocManager::install("org.Mm.eg.db")
+BiocManager::install("ReactomePA")
+BiocManager::install("reactome.db")
+```
+
+Seguidamente he creado los siguientes directorios.
+
+**Data** : Donde almacenaré todos los ficheros de entrada, recogidos de la base de datos www.ncbi.nlm.nih.gov/geo/ 
+**figures** : Directorio donde almacenaré todos los gráficos que vaya obteniendo.
+**results** : Dónde almacenaré todos los ficheros de resultados que vaya almacenando.
+
+
+```{r chunk setworking,echo=FALSE}
+#Creamos directorios para poder almacenar la información
+
+#setwd(".")
+#dir.create("data")
+#dir.create("results")
+#dir.create("figures")
+#dir.create("scripts")
+
+```
+
+
+# Abstract (Resumen)
+
+El estudio describe un método para medir la transcripción naciente de genes nucleares con un ensayo Nuclear Run-On (ANRO),  basado en Array utilizando plataformas comerciales en microarrays.
+Las mediciones ANRO en un modelo de celulas B P493-6 humano que expresa c-Myc inducible se realizaron después de 48 horas con o sin inducción del gen MYC,
+Las muestras se preparaon a partir de ARN Nuclear y ARN Total. 
+
+Todo el trabajo está subido en el repositorio con la siguiente url, https://github.com/EstheMar04/Marti_Esther_ADO_PEC1
+
+# Objetivo del Estudio
+
+La expresión génica se compara a nivel global después de 48 horas con y sin tetraciclina, medido tanto para el ARNO como para el ARN total. 
+
+# Materiales y Métodos
+
+## Naturaleza de los datos, tipo de experimento, tipo de microarrays utilizados
+
+
+Los datos estan identificados con el número de accesion: __GSE17239__ , el tratamiento que utiliza es comparar el nivel global con y sin tetraciclina. Los datos se encuentran en ficheros CELL. Para poder importarlos he preparado un fichero csv, creando 4 grupos dependiendo si se trabaja con ANRO o con RNA Total y para ambos el tratamientto utilizado con o sin tetracilina. Los grupos son NRO_NoTet (ANRO sin tetraciclina), NRO_Tet (ANRO con tetraciclina), Total_Tet ( RNA Total con tetraciclina) y Total_Tet ( RNA Total sin tetraciclina). 
+
+```{r ReadTargets,echo=FALSE}
+targets <- read.csv2("./data/targets.csv", header = TRUE, sep = ";") 
+knitr::kable(
+  targets, booktabs = TRUE,
+  caption = 'Contiene los datos de los ficheros utilizados')
+```
+
+La plataforma de **Microarrays Affimetrix** Exon.
+
+El siguiente paso es leer los ficheros CELL, para ello leemos primero la lista de ficheros que tenemos en el directorio **Data** y los alamacenamos en la variable __CelFiles__ , seguidamente creamos una variable __my.targets__ en la cual cruzamos los datos que tenemos en el fichero targets.csv.  Finalmente podemos cruzar la información de ambos ficheros en la variable __RowData__ y le cambiamos el nombre de las columnas por nuestro nombre corto del fichero. 
+
+```{r ReadCELfiles, message=FALSE, results='hide', warning=FALSE, echo=FALSE}
+library(oligo)
+celFiles <- list.celfiles("./data", full.names = TRUE)
+library(Biobase)
+my.targets <-read.AnnotatedDataFrame(file.path("./data","targets.csv"), 
+                                     header = TRUE, row.names = 1, 
+                                     sep=";") 
+rawData <- read.celfiles(celFiles, phenoData = my.targets)
+
+#cambaimos los nombres
+
+my.targets@data$ShortName->rownames(pData(rawData))
+colnames(rawData) <-rownames(pData(rawData)) 
+
+head(rawData)
+
+```
+
+# Métodos utilizados en el análisis
+
+## Control de calidad
+
+El siguiente paso que debemos realizar, es comprobar si los datos tienen suficiente calidad para la normalización. Si no fuera así ocurriria que se introduciria mucho ruido en el análisis, procando no poder resolver el proceso.
+
+Uso el  paquete **ArrayQualityMetrics** que realiza diferentes enfoques de calidad, como diagrama de caja de la intensidad de los datos y Análisis de componentes principales (PCA), entre otros.
+
+```{r QCRaw, message=FALSE, warning=FALSE, eval=FALSE, echo=FALSE}
+library(arrayQualityMetrics)
+arrayQualityMetrics(rawData)
+```
+
+Se puede obtener un análisis má completo de los datos utilizando funciones especificas diseñadas para dicho análisis. Mostramos en un grafico el resultado de este análisis, segun los grupos que tenemos montados.
+
+```{r echo=FALSE}
+library(ggplot2)
+library(ggrepel)
+plotPCA3 <- function (datos, labels, factor, title, scale,colores, size = 1.5, glineas = 0.25) {
+  data <- prcomp(t(datos),scale=scale)
+  # plot adjustments
+  dataDf <- data.frame(data$x)
+  Group <- factor
+  loads <- round(data$sdev^2/sum(data$sdev^2)*100,1)
+  # main plot
+  p1 <- ggplot(dataDf,aes(x=PC1, y=PC2)) +
+    theme_classic() +
+    geom_hline(yintercept = 0, color = "gray70") +
+    geom_vline(xintercept = 0, color = "gray70") +
+    geom_point(aes(color = Group), alpha = 0.55, size = 3) +
+    coord_cartesian(xlim = c(min(data$x[,1])-5,max(data$x[,1])+5)) +
+    scale_fill_discrete(name = "Group")
+  # avoiding labels superposition
+  p1 + geom_text_repel(aes(y = PC2 + 0.25, label = labels),segment.size = 0.25, size = size) + 
+    labs(x = c(paste("PC1",loads[1],"%")),y=c(paste("PC2",loads[2],"%"))) +  
+    ggtitle(paste("Principal Component Analysis for: ",title,sep=" "))+ 
+    theme(plot.title = element_text(hjust = 0.5)) +
+    scale_color_manual(values=colores)
+}
+```
+
+```{r PCARaw, message=FALSE, fig.cap="Visualización de los dos principales componentes de RawData", echo=FALSE}
+plotPCA3(exprs(rawData), labels = targets$ShortName, factor = targets$Group, 
+         title="Raw data", scale = FALSE, size = 3, 
+         colores = c("red", "blue", "green", "yellow"))
+```
+
+En este grafico de observamos que:
+* Las etiquetas de cada uno de los puntos de la gráfica son los nombres cortos que indicamos en nuestro fichero de targets.
+* Las características de cada tipo de muestras, es la columna de grupo, también de nuestro fichero targets
+* Finalmente los colores tenemos 4, uno para cada uno de nuestros grupos.
+
+En este gráfico vemos que obtenemos una PCA de 49,5% que es el total de la variabilidad de las muestras, dependiendo si se trabaja con RNA total o con ANRO. tenemos en la parte izquierda del grafico las muestras que trabajan con ANRO y en la parte derecha las que trabajan con RNA Total.
+
+De la misma manera podemos obtener un gráfico para ver las intensidades de las muestras utilizando la función boxplot.
+
+
+```{r BoxplotRaw,echo=FALSE, message=FALSE, fig.cap="Boxplot for arrays intensities (Raw Data)"}
+boxplot(rawData, cex.axis=0.5, las=2,  which="all", 
+         col = c(rep("red", 3), rep("blue", 3), rep("green", 3), rep("yellow", 3)),
+         main="Distribución de los valores de intensidad")
+```
+
+## Normalización de lo datos
+
+Antes de iniciar el analisis debemos de conseguir que las matrices sean comparables entre ellas, para ello debemos conseguir reducir o eliminar la variabilidad de las muestras que no se deba a razones biológicas. Para ello debemos normalizar los datos.
+
+```{r Normalizacion,echo=FALSE}
+eset_rma <- rma(rawData)
+```
+
+## Control de calidad después de la normalización
+
+Después de normalizar los datos debemos volver a comprobar los datos, para ver si hemos conseguido cambiar la variabilidad de las muestras. Lo hacemos de la misma manera que lo hemos hecho anteriormente. 
+
+
+```{r QCNorm,echo=FALSE, message=FALSE, warning=FALSE, eval=FALSE}
+library(arrayQualityMetrics)
+arrayQualityMetrics(eset_rma, outdir = file.path("./results", "QCDir.Norm"), force=TRUE)
+```
+
+Mostramos las muestras después de normalizar en un grafico el resultado de este análisis, según los grupos que en los que noe hemos basado.
+
+
+```{r PCANorm, message=FALSE, fig.cap="Visualización de los dos principales componente de los datos normalizados", echo=FALSE}
+plotPCA3(exprs(eset_rma), labels = targets$ShortName, factor = targets$Group, 
+         title="Normalized data", scale = FALSE, size = 3, 
+         colores = c("red", "blue", "green", "yellow"))
+```
+
+
+
+Una vez normalizados los datos la variabilidad a aumentado a 56.9% y visualmente ya vemos que tenemos a la derecha las muestras de ARN Total y a la izquierda las de ANRO, pero ahora vemos qtanto en ANRO como en ARN total tenemos en la parte positiva las muestras tratadas con tetraciclina y en la parte negativa las muestras que no han sido tratadas con tetraciclina. 
+
+Finalmente mostramos los datos normalizados con boxplot.
+
+```{r BoxplotNorm, message=FALSE, fig.cap="Distribution of  intensities for normalized data"}
+boxplot(eset_rma, cex.axis=0.5, las=2,  which="all", 
+        col = c(rep("red", 3), rep("blue", 3), rep("green", 3), rep("yellow", 3)),
+        main="Boxplot for arrays intensity: Normalized Data")
+```
+
+## Detección de Lotes
+
+Los resultados que obtengamos de los microarrays tienen pequeñas diferencias según el lote de los reactivos, los técnicos que realicen el test e incluso la fecha en la que se hace el experimento. El error acumulativo introducido por estas variaciones experimentales dependientes del tiempo y el lugar se denomina "efectos por lotes". Existen enfoques para identificar y eliminar los efectos por lote como el análisis de variables sustitutas, el análisis de componentes de variación principal y de combate (PVCA).
+
+
+```{r BatchDetection, message=FALSE, warning=FALSE}
+#load the library
+library(pvca)
+pData(eset_rma) <- targets
+#select the threshold
+pct_threshold <- 0.6
+#select the factors to analyze
+batch.factors <- c("Tipo.RNA", "Treatment")
+#run the analysis
+pvcaObj <- pvcaBatchAssess (eset_rma, batch.factors, pct_threshold)
+```
+
+```{r plotPVCA, fig.cap="Relativa a la importancia para los distintos factores con los que trabajamos Tipo.RNA y Tratamiento e interacción afectando a la expresión del Gen", echo=FALSE}
+#plot the results
+bp <- barplot(pvcaObj$dat, xlab = "Efectos",
+  ylab = "Variación de la proporción promedio ponderada",
+  ylim= c(0,1.1),col = c("mediumorchid"), las=2,
+  main="Estimación de PVCA")
+axis(1, at = bp, labels = pvcaObj$label, cex.axis = 0.75, las=2)
+values = pvcaObj$dat
+new_values = round(values , 3)
+text(bp,pvcaObj$dat,labels = new_values, pos=3, cex = 0.7)
+```
+
+## Detección de la mayoría de los genes variables
+
+En el siguiente gráfico mostramos las desviaciones estándar de todos los genes ordenados de menor a mayor. Los genes más variables son aquellos con una desviación estándar suoerior a 90%-95% de todas las desviaciones estándar. Es decir, tal y como vemos en el gráfico son todas aquellas con valores superiores a 20000.
+
+
+```{r SDplot, fig.cap="Los valores de las desviaciones estándar abarcan todas las muestras para todos los genes ordenados de menor a mayor",echo=FALSE}
+sds <- apply (exprs(eset_rma), 1, sd)
+sdsO<- sort(sds)
+plot(1:length(sdsO), sdsO, main="Distribución de variabilidad para todos los genes",
+     sub="Lineas Verticales =  intervalo entre 90% y 95% percentiles",
+     xlab="Gen índice de menor a mayor", ylab="Desviación estándart")
+abline(v=length(sds)*c(0.9,0.95))
+```
+
+
+## Filtraje no específico
+
+Este es recomendable para eliminar el ruido de fondo y limitar los ajustes posteriores a los necesarios. Los principales son tres:
+
+* Eliminación de spots marcados como erróneos mediante flags
+* Eliminación de spots con señales muy bajas debido a problemas en el spoting.
+* **Eliminación de genes que no presenten una variación significativa en su señal** , es decir filtraje por variabilidad.  Este es el que vamos a utilzar a continuación debido a que nos permite reducir el filtraje al mínimo.
+
+Para hacer este filtraje he buscado en la información de GSE17239 y este trabaja con 	[HuEx-1_0-st] Affymetrix Human Exon 1.0 ST Array [transcript (gene) version], debido a que no conseguia encontrar que base de datos existia para el paquete pd.huex.1.0.st.v2, encontré en Internet la siguiente información:
+
+__"The annotation packages for the Gene and Exon ST arrays in the current Bioconductor release (versions 8.3.0) are based on the na34 annotation files distributed by Affymetrix. It appears that there were some problems with their annotation pipeline. We asked Affy about the mouse Exon 1.0 ST arrays, and the response was:___
+
+__"There was a large issue with the **pipeline** used for NA34, which is why the annotation numbers are so low.  It had significant issues and Affymetrix was well aware of them.  We took a great deal of time and generated a new pipeline for NA35 that we hope will resolve a great many issues people were experiencing with NA34."___
+
+___The na35 data were released 15 April, which was after we released BioC 3.1. They have since (as of 1 June) released na35.1 versions for some arrays, which hopefully will be the last release from them. I am currently re-building all of the annotation packages for these arrays, and will hopefully have them available for download by the end of this week/early next week.___
+
+Para ello usamos la función en R __nsFilter__, que nos devuelve un report con los resultados filtrados.
+
+
+
+```{r Filtering1, results='hide', message=FALSE, echo=FALSE}
+library(genefilter)
+library(huex10sttranscriptcluster.db)
+annotation(eset_rma) <- "huex10sttranscriptcluster.db"
+filtered <- nsFilter(eset_rma, 
+                     require.entrez = TRUE, remove.dupEntrez = TRUE,
+                     var.filter=TRUE, var.func=IQR, var.cutoff=0.75, 
+                     filterByQuantile=TRUE, feature.exclude = "^AFFX")
+```
+
+```{r FilterResults1, results='hide', echo=FALSE}
+names(filtered)
+class(filtered$eset)
+```
+
+```{r FilterResults2,echo=FALSE}
+print(filtered$filter.log)
+eset_filtered <-filtered$eset
+```
+
+Después de filtrar hay `r dim(exprs(eset_filtered))[1]` genes a la izquierda.Estos datos los hemos almacenado en la variable *eset_filtered*
+
+## Guardamos los ficheros de normalización y de filtro
+
+Empezamos a guardar resultados en el directorio results que hemos creado al principio. Guardamos los datos en ficheros csv de los datos  normalizados, los datos filtrados y los datos nuevamente normalizados después de filtrarlos.
+
+```{r SaveData1, results='hide', message=FALSE}
+write.csv(exprs(eset_rma), file="./results/normalized.Data.csv")
+write.csv(exprs(eset_filtered), file="./results/normalized.Filtered.Data.csv")
+save(eset_rma, eset_filtered, file="./results/normalized.Data.Rda")
+
+```
+```{r LoadSavedData,echo=FALSE}
+if (!exists("eset_filtered")) load (file="./results/normalized.Data.Rda")
+```
+
+
+## Diseño de la Matriz
+
+A continuación muestro una Matriz basándome en los grupos que he introducido en el fichero targets. El estudio se basa en cuatro niveles ANRO/RNA Total combinado con tratado con tetracilcina o no tratados.
+
+
+
+```{r DesignMatrix, message=FALSE,echo=FALSE}
+library(limma)
+designMat<- model.matrix(~0+Group, pData(eset_filtered))
+colnames(designMat) <- c("NRO_NoTet", "NRO_Tet", "Total_Tet", "Total_NoTet")
+print(designMat)
+```
+
+## Definir comparación con contrastes
+
+He hecho una comparación de las muestras, dependiendo de la preparación de las muestras, tal y como he indicado al principio, se prepararon a partir de ARN Nuclear (NRO) y ARN Total (Total). Estas muestras se trataron con (Tet) o sin tetraciclina (noTet).
+
+Así pues he realizado las siguientes tres comparaciones, 
+ * NROvsTotal.Tet -> ARN Nuclear versus ARN Total que han sido tratados con Tetraciclina
+ * NROvsTotal.NoTet -> ARN Nuclear versus ARN Total que no han sido tratados con Tetraciclina
+ * INT -> una comparativa de las dos anteriores.
+ 
+ A continuación muestro una tabla con el resultado obtenido
+
+```{r setContrasts}
+cont.matrix <- makeContrasts (NROvsTotal.Tet = NRO_Tet-Total_Tet,
+                              NROvsTotal.NoTet = NRO_NoTet-Total_NoTet,
+                              INT = (NRO_Tet-Total_Tet) - (NRO_NoTet-Total_NoTet),
+                              levels=designMat)
+print(cont.matrix)
+```
+
+## Estimación del modelo y selección de genes
+
+Una vez definida la matriza y las comparaciones, se puede pasar a estimar el modelo y los contrastes y realizar las pruebas de significación las cuales nos van a ayudar a tomar la decisión.
+
+Dentro del paquete lima, tenemos los modelos empíricos de Bayes para combinar una estimación de variabilidad basada en la matriz completa con estimaciones individuales basadas en cada valor individual proporcionadas por estimaciones de error mejoradas.
+
+El análisis proporciona las estadísticas de pruebas habituales para ordenar los genes expresados diferencialmente de mayor a menor, segun p-valor. Ajustamos estos valores de p-valor para tener un control sobre los falsos positivos.
+
+Almacenamos los valores en una clase con el nombre fit.main.
+
+
+```{r, linearmodelfit}
+library(limma)
+fit<-lmFit(eset_filtered, designMat)
+fit.main<-contrasts.fit(fit, cont.matrix)
+fit.main<-eBayes(fit.main)
+class(fit.main)
+```
+
+## Obtención de listas de genes expresados diferencialmente
+
+Podemos obtener una vista para las primeras lineas de cada tabla. 
+
+Para la primera comparación NROvsTotal: Genes que cambian su expresión de los distintos RNA según si son tratados con tetraciclina: 
+
+
+```{r, topTabs1, echo=FALSE}
+topTab_NROvsTotal.Tet <- topTable (fit.main, number=nrow(fit.main), coef="NROvsTotal.Tet", adjust="fdr") 
+head(topTab_NROvsTotal.Tet)
+```
+
+Explicación de cada columna:
+
+* La Primera columna de cada tabla contiene el ID de la fabrica de Affimetrix
+  para cada probeset. El siguiente paso se corresponde a cada ID, este proceso
+  es llamado **annotation**.
+* `logFC`: Diferencia entre grupos.  
+*  `AveExpr`: Promedio de todos los genes en la comparación.
+*  `t` : Estadística t moderada.
+*  `P.Value`: p-valor.  
+*  `adj.P.Val`: p-valor ajustado      
+*  `B`: Estadístiaca B
+
+Para la segunda compraración (NROvsTotal):  Genes que cambian su expresión de los distintos RNA según si son tratados sin tetraciclina, con las mismas columnas que en la tabla anterior: 
+
+```{r, topTabs2,echo=FALSE}
+topTab_NROvsTotal.NoTet <- topTable (fit.main, number=nrow(fit.main), coef="NROvsTotal.NoTet", adjust="fdr") 
+head(topTab_NROvsTotal.NoTet)
+```
+
+Finalmente para la última comparación, con las mismas columnas mostramos los Genes que difieren entre ambas comparaciones anteriores
+
+```{r, topTabs3, echo=FALSE}
+topTab_INT  <- topTable (fit.main, number=nrow(fit.main), coef="INT", adjust="fdr") 
+head(topTab_INT)
+```
+
+
+
+## Gene Annotation
+
+Una vez tenemos las tables con información adicional las características han sido selecionadas. Este proceso en llamado anotación y esencialmente lo que hace es buscar información para asociar identificadores que aparecen en la tabla superior. 
+
+Finalmente almacenamos el resultado en el fichero topAnnotated_INT.csv.
+
+
+```{r GeneAnnotation, message=FALSE, warning=FALSE,echo=FALSE}
+annotatedTopTable <- function(topTab, anotPackage)
+{
+  topTab <- cbind(PROBEID=rownames(topTab), topTab)
+  myProbes <- rownames(topTab)
+  thePackage <- eval(parse(text = anotPackage))
+  geneAnots <- select(thePackage, myProbes, c("SYMBOL", "ENTREZID", "GENENAME"))
+  annotatedTopTab<- merge(x=geneAnots, y=topTab, by.x="PROBEID", by.y="PROBEID")
+return(annotatedTopTab)
+}
+```
+
+
+```{r annotateTopTables,echo=FALSE,message=FALSE}
+topAnnotated_NROvsTotal.Tet <- annotatedTopTable(topTab_NROvsTotal.Tet,
+anotPackage="huex10sttranscriptcluster.db")
+
+topAnnotated_NROvsTotal.NoTet <- annotatedTopTable(topTab_NROvsTotal.NoTet,
+anotPackage="huex10sttranscriptcluster.db")
+
+topAnnotated_INT <- annotatedTopTable(topTab_INT,
+anotPackage="huex10sttranscriptcluster.db")
+
+write.csv(topAnnotated_NROvsTotal.Tet, file="./results/topTab_NROvsTotal.Tet.csv")
+write.csv(topAnnotated_NROvsTotal.NoTet, file="./results/topTab_NROvsTotal.NoTet.csv")
+write.csv(topAnnotated_INT, file="./results/topAnnotated_INT.csv")
+```
+
+Mostramos una tabla con los datos obtenidos.
+
+```{r annotatedTop, echo=FALSE}
+short<- head(topTab_NROvsTotal.Tet[1:5,1:4])
+# library(kableExtra)
+# knitr::kable(
+#   short, booktabs = TRUE,
+#   caption = 'Annotations añadidas a los resultados "topTable" para la comparación "topTab_NROvsTotal.Tet"'
+# )
+show(short)
+```
+
+
+## Visualizando la expresión diferencial
+
+Para poder mostrar la visualización de expresión diferencial tenemos el plot de volcan, que nos muestra la cantidad de genes que contiene.
+
+Mostramos la tabla y almacenamos la grafica en el directorio figures.
+
+```{r volcanoPlot, fig.cap="Plot Volcan para mostrar la comparación entr ANRO y ARN total tratados con tetraciclina y sin",message=FALSE}
+library(huex10sttranscriptcluster.db)
+geneSymbols <- select(huex10sttranscriptcluster.db, rownames(fit.main), c("SYMBOL"))
+SYMBOLS<- geneSymbols$SYMBOL
+volcanoplot(fit.main, coef=1, highlight=4, names=SYMBOLS, 
+            main=paste("Genes expresados diferencialmente", colnames(cont.matrix)[1], sep="\n"))
+  abline(v=c(-2.5,2.5))
+```
+
+```{r saveVolcanos, echo=FALSE, results='hide',message=FALSE}
+pdf("figures/Volcanos.pdf")
+for (i in colnames(cont.matrix)){
+  volcanoplot(fit.main, coef=i, highlight=4, names=SYMBOLS,
+              main=paste("Genes expresados diferencialmente",i, sep="\n"))
+  abline(v=c(-2.5,2.5))
+}
+dev.off()
+```
+
+
+## Múltiples comparaciones
+
+Al seleccionar los genes en varias comparaciones, hay que conocer que genes se han seleccionado en cada comparación . En algunas ocasiones, los genes biológicamente relevantes serán aquellos que se seleccionan en uno de ellos pero no en otros. sin embargo en otras ocasiones, su interés radicará en los genes que se seleccionan en todas las comparaciones. Dentro del paquete lima tenemos la función `decideTests` y `vennDiagram` con los cuales podemos recontar los genes.
+
+La primera función nos muestra los datos agrupados en columnas y la segunda función nos muestra una grafica en la que podemos ver como estan agrupados los genes.
+
+
+
+```{r decideTests.1,echo=FALSE }
+library(limma)
+res<-decideTests(fit.main, method="separate", adjust.method="fdr", p.value=0.000000001, lfc=1)
+```
+
+```{r resumeDecideTests, echo=FALSE}
+sum.res.rows<-apply(abs(res),1,sum)
+res.selected<-res[sum.res.rows!=0,] 
+print(summary(res))
+
+```
+```{r, vennDiagram, fig.cap="Diagrama Venn muestra los genes mas comunes de las tres comparaciones"}
+vennDiagram (res.selected[,1:3], cex=1)
+title("Genes más comunes de las tres comparaciones\n Genes seleccionados con FDR < 0.0000000001 y logFC > 1")
+```
+# Mapa de calor
+
+```{r data4Heatmap,message=FALSE}
+probesInHeatmap <- rownames(res.selected)
+HMdata <- exprs(eset_filtered)[rownames(exprs(eset_filtered)) %in% probesInHeatmap,]
+
+geneSymbols <- select(huex10sttranscriptcluster.db, rownames(HMdata), c("SYMBOL"))
+SYMBOLS<- geneSymbols$SYMBOL
+rownames(HMdata) <- SYMBOLS
+write.csv(HMdata, file = file.path("./results/data4Heatmap.csv"))
+```
+
+```{r heatmapNoclustering, fig.cap="Heatmap for expression data without any grouping",message=FALSE}
+my_palette <- colorRampPalette(c("blue", "red"))(n = 299)
+library(gplots)
+
+heatmap.2(HMdata,
+          Rowv = FALSE,
+          Colv = FALSE,
+          main = "Genes expresados diferencialmente \n FDR < 0.000000001, logFC >=1",
+          scale = "row",
+          col = my_palette,
+          sepcolor = "white",
+          sepwidth = c(0.05,0.05),
+          cexRow = 1,
+          cexCol = 1,
+          key = TRUE,
+          keysize = 1.5,
+          density.info = "histogram",
+          ColSideColors = c(rep("red",4),rep("blue",4), rep("green",4), rep("yellow",4)),
+          tracecol = NULL,
+          dendrogram = "none",
+          srtCol = 30)
+```
+
+
+
+# Significado Biologico de los resultados
+
+Finalmente una vez tenemos todas las comparaciones entre los genes, estas deben ser interpretadas. 
+
+Como primer paso, preparamos la lista de listas de genes que se analizarán:
+
+```{r selectGenes,message=FALSE}
+listOfTables <- list(NROvsTotal.Tet = topTab_NROvsTotal.Tet, 
+                     NROvsTotal.NoTet  = topTab_NROvsTotal.NoTet, 
+                     INT = topTab_INT)
+listOfSelected <- list()
+for (i in 1:length(listOfTables)){
+  topTab <- listOfTables[[i]]
+  whichGenes<-topTab["adj.P.Val"]<0.15
+  selectedIDs <- rownames(topTab)[whichGenes]
+  EntrezIDs<- select(huex10sttranscriptcluster.db, selectedIDs, c("ENTREZID"))
+  EntrezIDs <- EntrezIDs$ENTREZID
+  listOfSelected[[i]] <- EntrezIDs
+  names(listOfSelected)[i] <- names(listOfTables)[i]
+}
+sapply(listOfSelected, length)
+```
+
+Cómo segunda opción definimos nuestro universo como todos los genes que tienen al menos una anotación en la ontología genetica, 
+
+```{r}
+library(org.Hs.eg.db)
+
+
+mapped_genes2GO <- mappedkeys(org.Hs.egGO)
+mapped_genes2KEGG <- mappedkeys(org.Hs.egPATH)
+mapped_genes <- union(mapped_genes2GO , mapped_genes2KEGG)
+```
+
+
+A las dos primeras listas se les aplica el análisis de significación biológica.
+
+```{r BiologicalSig,echo=FALSE,message=FALSE}
+library(ReactomePA)
+
+listOfData <- listOfSelected[1:2]
+comparisonsNames <- names(listOfData)
+universe <- mapped_genes
+
+for (i in 1:length(listOfData)){
+  genesIn <- listOfData[[i]]
+  comparison <- comparisonsNames[i]
+  enrich.result <- enrichPathway(gene = genesIn,
+                                 pvalueCutoff = 0.05,
+                                 readable = T,
+                                 pAdjustMethod = "BH",
+                                 organism = "human",
+                                 universe = universe)
+  
+  cat("##################################")
+  cat("\nComparación: ", comparison,"\n")
+  print(head(enrich.result))
+
+  if (length(rownames(enrich.result@result)) != 0) {
+  write.csv(as.data.frame(enrich.result), 
+             file =paste0("./results/","ReactomePA.Results.",comparison,".csv"), 
+             row.names = FALSE)
+  
+  
+  }
+}
+```
+
+```{r network, fig.cap="Red obtenida del análisis de enriquecimiento de Reactome en la lista obtenida de la comparación entre ARN nuclear y ARN total según se trate con tetraciclina o no"}
+  cnetplot(enrich.result, categorySize = "geneNum", schowCategory = 15, 
+         vertex.label.cex = 0.75)
+```
+
+```{r tableReacto, echo=FALSE}
+Tab.react <- read.csv2(file.path("./results/ReactomePA.Results.NROvsTotal.Tet.csv"), 
+                       sep = ",", header = TRUE, row.names = 1)
+
+Tab.react <- Tab.react[1:4, 1:5]
+knitr::kable(Tab.react, booktabs = TRUE, caption = "Primeras filas y columnas para results Reactome en comparación NROvsTtotal.Tet.csv")
+```
+
+Los Resultados que hemos obtenido son:
+
+  * un fichero csv con el resumen a partir de la función enrichPathway asociado al mapeo de los genes que hemos escogido. 
+  * un grafico con el mejor resultado.
+  * un gráfico con la red de toda la información de los datos enriquecidos relacionados con los genes escogidos.
+
+
+
+# Resultados
+
+A continuación mostramos un resumen con todos los ficheros y los resultados que hemos obtenido
+
+```{r listOfFiles, echo=FALSE}
+listOfFiles <- dir("./results/") 
+knitr::kable(
+  listOfFiles, booktabs = TRUE,
+  caption = 'Lista de Ficjeros generada en los análisis',
+  col.names="Lista de ficheros"
+)
+```
+
+
+# Apendice
+## Comentarios de codigo R
+
+A continuación mostramos el código R que he utilizado para obtener el Significado Biológico de los resultados.
+
+Primero creamos una lista con todas las comparaciones que hemos obtenido anteriormente de ARN nuclear y ARN total tratado o no tratado con tetraciclina, añadimos también la comparación entre las dos anteriores en la variable INT.
+
+__listOfTables <- list(NROvsTotal.Tet = topTab_NROvsTotal.Tet, __
+                     __NROvsTotal.NoTet  = topTab_NROvsTotal.NoTet, __
+                     __INT = topTab_INT)__
+__listOfSelected <- list()__
+
+Seguidamente creamos un bucle  para el conjunto de tablas que acabamos de crear en el que seleccionamos todos los genes con un p-valor ajustado < 0.15. Este resultado lo añadimos a una lista llamada listOfSelected.
+
+__for (i in 1:length(listOfTables)){__
+  
+  __topTab <- listOfTables[[i]]__
+  
+ 
+  __whichGenes<-topTab["adj.P.Val"]<0.15__
+  __selectedIDs <- rownames(topTab)[whichGenes]__
+  
+  __EntrezIDs<- select(huex10sttranscriptcluster.db, selectedIDs, c("ENTREZID"))__
+  __EntrezIDs <- EntrezIDs$ENTREZID__
+  __listOfSelected[[i]] <- EntrezIDs__
+  __names(listOfSelected)[i] <- names(listOfTables)[i]__
+__}__
+__sapply(listOfSelected, length)__
+
+
+Una vez tenemos la lista anterior creamos nuestro universo, para ello usamos la libreria org.Hs.eg.db, porque estamos trabajando con genes de homosapiens (human). Mapeamos egGO y egPATH y realizamos la unión de ambos, para temer todos los datos en una variable y poderlo comparar con los datos de nuestro universo.
+
+
+__library(org.Hs.eg.db)__
+
+__mapped_genes2GO <- mappedkeys(org.Hs.egGO)__
+__mapped_genes2KEGG <- mappedkeys(org.Hs.egPATH)__
+__mapped_genes <- union(mapped_genes2GO , mapped_genes2KEGG)__
+
+
+A través de la libreria __ReactomePA__, comparamos la lista de los genes que hemos obtenido en el mapeo anterior con nuestro universo.
+
+__enrich.result <- enrichPathway(gene = genesIn,__
+                                 __pvalueCutoff = 0.05,__
+                                 __readable = T,__
+                                 __pAdjustMethod = "BH",__
+                                 __organism = "human",__
+                                 __universe = universe)__
+  
+Una vez tenemos los resultados lo grabamos en ficheros csv. Hay que tener en cuenta que solo trabajamos con las 2 comparaciones primeras, no trabajamos con la comparación que tenemos entre las dos primeras comparaciones.
+  
+ __if (length(rownames(enrich.result@result)) != 0) {__
+  __write.csv(as.data.frame(enrich.result), __
+             __file =paste0("./results/","ReactomePA.Results.",comparison,".csv"), __
+             __row.names = FALSE)__
+             
+
+
+# Referencias
+
+```{r generateBibliography, echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE}
+
+require("knitcitations")
+cleanbib()
+options("citation_format" = "pandoc")
+read.bibtex(file = "references.bib")
+```
